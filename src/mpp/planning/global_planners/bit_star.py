@@ -22,7 +22,7 @@ import numpy as np
 
 from mpp.geometry import resample_path
 from mpp.mapping.costmap import Costmap
-from mpp.planning.global_planners.base import GlobalPlanner, PlanResult
+from mpp.planning.global_planners.base import ClearanceChecker, GlobalPlanner, PlanResult
 from mpp.planning.global_planners.sampling import Sampler, SearchGraph, rgg_radius
 
 
@@ -47,8 +47,9 @@ class BITStar(GlobalPlanner):
 
     def _plan(self, costmap: Costmap, start: np.ndarray, goal: np.ndarray) -> PlanResult:
         t0 = time.perf_counter()
-        sampler = Sampler(costmap, self.rng, self.margin)
-        G = SearchGraph(costmap, start, goal, self.margin)
+        checker = ClearanceChecker(costmap, self.margin, start, goal)
+        sampler = Sampler(costmap, self.rng, checker)
+        G = SearchGraph(costmap, start, goal, checker)
         qv: list[tuple[float, int]] = []  # vertex queue: g_T(v) + h_hat(v)
         qe: list[tuple[float, int, int]] = []  # edge queue: g_T(v) + c_hat(v,x) + h_hat(x)
         expanded_in_old_batch = np.zeros(0, dtype=bool)

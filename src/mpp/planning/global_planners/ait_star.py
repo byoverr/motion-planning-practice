@@ -26,7 +26,7 @@ import numpy as np
 
 from mpp.geometry import resample_path
 from mpp.mapping.costmap import Costmap
-from mpp.planning.global_planners.base import GlobalPlanner, PlanResult
+from mpp.planning.global_planners.base import ClearanceChecker, GlobalPlanner, PlanResult
 from mpp.planning.global_planners.sampling import Sampler, SearchGraph, rgg_radius
 
 INF = math.inf
@@ -128,8 +128,9 @@ class AITStar(GlobalPlanner):
 
     def _plan(self, costmap: Costmap, start: np.ndarray, goal: np.ndarray) -> PlanResult:
         t0 = time.perf_counter()
-        sampler = Sampler(costmap, self.rng, self.margin)
-        G = SearchGraph(costmap, start, goal, self.margin)
+        checker = ClearanceChecker(costmap, self.margin, start, goal)
+        sampler = Sampler(costmap, self.rng, checker)
+        G = SearchGraph(costmap, start, goal, checker)
         fq: list[tuple[float, int, int]] = []
         rev: _ReverseSearch | None = None
         first_time = None

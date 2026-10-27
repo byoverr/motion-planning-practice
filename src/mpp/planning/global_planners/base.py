@@ -61,12 +61,41 @@ class GlobalPlanner(ABC):
     def _plan(self, costmap: Costmap, start: np.ndarray, goal: np.ndarray) -> PlanResult: ...
 
 
+class ClearanceChecker:
+    """Validity check of the sampling planners: clearance >= inscribed radius + `margin`.
+
+    The margin keeps paths away from the shelves, so a few new lidar cells do not invalidate
+    them at once. Around the start and goal (within `near` metres) it is relaxed to zero:
+    the robot may legitimately stand close to a wall. OMPL validation uses the same rule.
+    """
+
+    def __init__(
+        self, costmap: Costmap, margin: float, start: np.ndarray, goal: np.ndarray
+    ) -> None:
+        self.cm = costmap
+        self.margin = margin
+        self.ends = np.vstack([start, goal])
+        self.near = 2.0 * margin + 0.1
+
+    def points_free(self, pts: np.ndarray) -> np.ndarray:
+        pts = np.asarray(pts, float).reshape(-1, 2)
+        d = np.linalg.norm(pts[:, None, :] - self.ends[None], axis=-1).min(axis=1)
+        need = self.cm.inscribed + np.where(d < self.near, 0.0, self.margin)
+        return self.cm.clearance_at(pts) >= need
+
+    def segment_free(self, a: np.ndarray, b: np.ndarray) -> bool:
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        n = max(int(np.ceil(np.linalg.norm(b - a) / (0.25 * self.cm.res))), 1)
+        t = np.linspace(0.0, 1.0, n + 1)[:, None]
+        return bool(self.points_free(a + t * (b - a)).all())
+
+
 def shortcut_path(
     path: np.ndarray,
     costmap: Costmap,
     rng: np.random.Generator,
     iterations: int = 200,
-    margin: float = 0.0,
+    checker: ClearanceChecker | None = None,
 ) -> np.ndarray:
     """Random shortcutting (as in OMPL's PathSimplifier): try to replace sub-paths by
     straight segments that stay collision-free. Sampling planners need this, their raw
@@ -74,8 +103,9 @@ def shortcut_path(
     pts = [p for p in np.asarray(path, float)]
 
     def ok(i: int, j: int) -> bool:
-        m = 0.0 if i == 0 or j == len(pts) - 1 else margin
-        return costmap.segment_free(pts[i], pts[j], margin=m)
+        if checker is not None:
+            return checker.segment_free(pts[i], pts[j])
+        return costmap.segment_free(pts[i], pts[j])
 
     for _ in range(iterations):
         if len(pts) < 3:

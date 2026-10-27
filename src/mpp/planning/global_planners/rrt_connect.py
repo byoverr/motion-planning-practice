@@ -14,7 +14,12 @@ import numpy as np
 
 from mpp.geometry import resample_path
 from mpp.mapping.costmap import Costmap
-from mpp.planning.global_planners.base import GlobalPlanner, PlanResult, shortcut_path
+from mpp.planning.global_planners.base import (
+    ClearanceChecker,
+    GlobalPlanner,
+    PlanResult,
+    shortcut_path,
+)
 from mpp.planning.global_planners.sampling import Sampler, extract_path
 
 TRAPPED, ADVANCED, REACHED = 0, 1, 2
@@ -76,8 +81,7 @@ class RRTConnect(GlobalPlanner):
         if dist < 1e-9:
             return REACHED, i
         new = target if dist <= self.step else q + d * (self.step / dist)
-        # the roots (start, goal) may sit close to a wall; everything else keeps the margin
-        if not cm.segment_free(q, new, margin=0.0 if i == 0 else self.margin):
+        if not self._checker.segment_free(q, new):
             return TRAPPED, -1
         j = tree.add(new, i)
         return (REACHED if dist <= self.step else ADVANCED), j
@@ -90,6 +94,7 @@ class RRTConnect(GlobalPlanner):
 
     def _plan(self, costmap: Costmap, start: np.ndarray, goal: np.ndarray) -> PlanResult:
         t0 = time.perf_counter()
+        self._checker = ClearanceChecker(costmap, self.margin, start, goal)
         sampler = Sampler(costmap, self.rng)
         ta, tb = _Tree(start), _Tree(goal)
         a_is_start = True
@@ -115,7 +120,7 @@ class RRTConnect(GlobalPlanner):
             return PlanResult(None, self.name, iterations=it, tree=edges)
         raw_length = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
         if self.simplify:
-            path = shortcut_path(path, costmap, self.rng, margin=self.margin)
+            path = shortcut_path(path, costmap, self.rng, checker=self._checker)
         return PlanResult(
             resample_path(path, 0.05),
             self.name,

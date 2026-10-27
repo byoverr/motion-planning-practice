@@ -42,3 +42,7 @@ ignore = ["E741"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# one-off research scripts: closures are used inside the loop that defines them
+"scripts/*" = ["B007", "B023", "E501", "SIM115"]

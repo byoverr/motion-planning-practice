@@ -11,7 +11,12 @@ import numpy as np
 
 from mpp.geometry import resample_path
 from mpp.mapping.costmap import Costmap
-from mpp.planning.global_planners.base import GlobalPlanner, PlanResult, shortcut_path
+from mpp.planning.global_planners.base import (
+    ClearanceChecker,
+    GlobalPlanner,
+    PlanResult,
+    shortcut_path,
+)
 
 _seeded = False  # OMPL accepts a seed only once per process
 
@@ -59,18 +64,10 @@ class OMPLPlanner(GlobalPlanner):
         bounds.setHigh(1, y1)
         space.setBounds(bounds)
         ss = og.SimpleSetup(space)
-        margin = self.margin
-        near_ends = 2 * margin + 0.1
+        checker = ClearanceChecker(costmap, self.margin, start, goal)
 
         def valid(state) -> bool:
-            p = np.array([state[0], state[1]])
-            # like our planners: allow the start/goal surroundings to be closer to obstacles
-            m = (
-                0.0
-                if min(np.linalg.norm(p - start), np.linalg.norm(p - goal)) < near_ends
-                else margin
-            )
-            return bool(costmap.is_free(p, m))
+            return bool(checker.points_free(np.array([state[0], state[1]]))[0])
 
         ss.setStateValidityChecker(valid)
         si = ss.getSpaceInformation()
@@ -88,5 +85,5 @@ class OMPLPlanner(GlobalPlanner):
         path = np.array([(st[0], st[1]) for st in sol.getStates()])
         raw = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
         if self.simplify:
-            path = shortcut_path(path, costmap, self.rng, margin=margin)
+            path = shortcut_path(path, costmap, self.rng, checker=checker)
         return PlanResult(resample_path(path, 0.05), self.name, info={"raw_length": raw})
