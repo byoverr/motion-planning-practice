@@ -1,0 +1,77 @@
+<!--
+  ROBOTIS TurtleBot3 Burger for MuJoCo.
+
+  Converted by hand from turtlebot3_description/urdf/turtlebot3_burger.urdf
+  (https://github.com/ROBOTIS-GIT/turtlebot3, tag 2.3.7, Apache-2.0, see LICENSE).
+  Meshes are the original STL files in millimetres.
+
+  Frames: the root body is base_footprint (on the ground, between the wheels),
+  x forward, y left, z up. Both wheel joints rotate about +y, so a positive wheel
+  velocity drives the robot forward.
+
+  Open it alone with:  uv run mpp show-robot
+-->
+<mujoco model="turtlebot3_burger">
+  <compiler angle="radian" meshdir="meshes" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+
+  <asset>
+    <mesh name="burger_base" file="burger_base.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="left_tire" file="left_tire.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="right_tire" file="right_tire.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="lds" file="lds.stl" scale="0.001 0.001 0.001"/>
+    <material name="tb3_body" rgba="0.42 0.42 0.45 1"/>
+    <material name="tb3_dark" rgba="0.12 0.12 0.12 1"/>
+  </asset>
+
+  <default>
+    <default class="tb3_visual">
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0"/>
+    </default>
+    <default class="tb3_collision">
+      <geom group="3" rgba="0.9 0.2 0.2 0.4" density="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <body name="base_footprint" pos="0 0 0">
+      <freejoint name="base"/>
+      <!-- base_link sits 10 mm above the footprint -->
+      <inertial pos="0 0 0.010" mass="0.82573504"
+                fullinertia="2.2124416e-03 2.1193702e-03 2.0064271e-03 -1.2294101e-05 3.4938785e-05 -5.0120904e-06"/>
+      <geom class="tb3_visual" mesh="burger_base" material="tb3_body" pos="-0.032 0 0.010"/>
+      <geom class="tb3_collision" name="base_collision" type="box" size="0.070 0.070 0.0715" pos="-0.032 0 0.080"/>
+      <!-- the URDF uses a small box for the ball caster; a frictionless sphere slides better -->
+      <geom class="tb3_collision" name="caster_back" type="sphere" size="0.008" pos="-0.081 0 0.008" condim="1"/>
+
+      <body name="base_scan" pos="-0.032 0 0.182">
+        <inertial pos="0 0 0" mass="0.114" diaginertia="9e-05 9e-05 1.7e-04"/>
+        <geom class="tb3_visual" mesh="lds" material="tb3_dark"/>
+        <geom class="tb3_collision" name="scan_collision" type="cylinder" size="0.055 0.01575" pos="0.015 0 -0.0065"/>
+        <site name="lidar" pos="0 0 0" size="0.01"/>
+      </body>
+
+      <body name="wheel_left" pos="0 0.080 0.033">
+        <joint name="wheel_left" type="hinge" axis="0 1 0" damping="0.0005"/>
+        <inertial pos="0 0 0" mass="0.02849894" diaginertia="1.1175580e-05 2.0712558e-05 1.1192413e-05"/>
+        <geom class="tb3_visual" mesh="left_tire" material="tb3_dark"/>
+        <geom class="tb3_collision" name="wheel_left_collision" type="cylinder" size="0.033 0.009"
+              quat="0.70710678 -0.70710678 0 0" friction="1.2 0.005 0.0001"/>
+      </body>
+
+      <body name="wheel_right" pos="0 -0.080 0.033">
+        <joint name="wheel_right" type="hinge" axis="0 1 0" damping="0.0005"/>
+        <inertial pos="0 0 0" mass="0.02849894" diaginertia="1.1175580e-05 2.0712558e-05 1.1192413e-05"/>
+        <geom class="tb3_visual" mesh="right_tire" material="tb3_dark"/>
+        <geom class="tb3_collision" name="wheel_right_collision" type="cylinder" size="0.033 0.009"
+              quat="0.70710678 -0.70710678 0 0" friction="1.2 0.005 0.0001"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- Dynamixel XL430 wheel motors: velocity servos, 0.22 m/s / 0.033 m = 6.67 rad/s -->
+  <actuator>
+    <velocity name="wheel_left" joint="wheel_left" kv="0.5" ctrlrange="-6.67 6.67" forcerange="-0.1 0.1"/>
+    <velocity name="wheel_right" joint="wheel_right" kv="0.5" ctrlrange="-6.67 6.67" forcerange="-0.1 0.1"/>
+  </actuator>
+</mujoco>
