@@ -60,6 +60,7 @@ class EpisodeResult:
     contact_time: float
     min_gap: float  # closest distance between the robot body and an obstacle, m
     mean_speed: float
+    local_ms: float  # mean wall-clock time of one local planner call
     wall_time: float
     trajectory: np.ndarray = field(repr=False, default=None)
     plans: list = field(repr=False, default_factory=list)
@@ -176,6 +177,7 @@ def run_episode(
         contact_time=round(sim.contacts.time, 3),
         min_gap=round(gap, 3),
         mean_speed=round(dist / max(sim.time, 1e-6), 3),
+        local_ms=round(1000 * st.local_time / max(st.local_calls, 1), 3),
         wall_time=round(time.perf_counter() - wall0, 2),
         trajectory=traj,
         plans=st.plans,
