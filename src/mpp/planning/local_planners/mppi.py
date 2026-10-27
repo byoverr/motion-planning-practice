@@ -19,6 +19,7 @@ from scipy.signal import savgol_filter
 from mpp.geometry import rollout_unicycle, wrap_angle
 from mpp.mapping.costmap import Costmap
 from mpp.planning.local_planners.base import LocalPlan, LocalPlanner, distance_to_points
+from mpp.planning.local_planners.memory import MotionMemory
 from mpp.robot.model import RobotParams
 
 
@@ -49,6 +50,8 @@ class MPPI(LocalPlanner):
         safety: float = 0.02,
         sampler: str = "gaussian",
         lognormal_sigma: float = 0.6,
+        memory: MotionMemory | None = None,
+        memory_share: float = 0.5,
         seed: int | None = 0,
     ) -> None:
         super().__init__(robot, dt)
@@ -57,6 +60,9 @@ class MPPI(LocalPlanner):
         self.sg_window = smoothing_window
         self.sampler = sampler
         self.ln_sigma = lognormal_sigma
+        self.memory = memory
+        self.memory_share = memory_share
+        self.memory_hits = 0
         self.T = int(round(horizon / dt))
         self.K = samples
         self.std = np.array([std_v, std_w])
@@ -91,6 +97,14 @@ class MPPI(LocalPlanner):
             noise *= np.exp(self.rng.normal(-0.5 * s * s, s, size=noise.shape))
         noise[0] = 0.0  # keep the unperturbed previous solution as one of the candidates
         U = self.U[None] + noise
+        if self.memory is not None:
+            # part of the samples around what worked here on an earlier run (Biased-MPPI style)
+            prior = self.memory.lookup(pose, self.T)
+            if prior is not None:
+                self.memory_hits += 1
+                k = max(1, int(self.K * self.memory_share))
+                U[-k:] = prior[None] + noise[-k:]
+                U[-1] = prior
         U[..., 0] = np.clip(U[..., 0], r.min_v, r.max_v)
         U[..., 1] = np.clip(U[..., 1], -r.max_w, r.max_w)
         # acceleration limits along the horizon, as Nav2's motion model applies them

@@ -15,6 +15,7 @@ Each control cycle it
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -60,6 +61,8 @@ class NavStats:
     bypasses: int = 0
     recoveries: int = 0
     plan_failures: int = 0
+    local_time: float = 0.0  # wall-clock seconds spent in the local planner
+    local_calls: int = 0
 
 
 class Navigator:
@@ -239,7 +242,10 @@ class Navigator:
         if self.cfg.periodic_replan and t - self._last_plan_t >= self.cfg.periodic_replan:
             self._plan(pose, t, "replan", "периодическое перепланирование")
 
+        t0 = time.perf_counter()
         lp = self.lp.compute(pose, vel, self.cm)
+        self.stats.local_time += time.perf_counter() - t0
+        self.stats.local_calls += 1
         self.last_local = lp
         if lp.status != "ok":
             if self._no_traj_since is None:

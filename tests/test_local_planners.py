@@ -96,3 +96,29 @@ def test_graceful_control_law_matches_nav2_formula():
     assert gc.curvature(r, phi, delta) == pytest.approx(expected)
     v, w = gc.control((1.0, 0.0, 0.0), (0.0, 0.0, 0.0))  # target straight ahead
     assert w == pytest.approx(0.0, abs=1e-9) and v > 0
+
+
+def test_motion_memory_proposes_remembered_commands():
+    from mpp.planning.local_planners.memory import MotionMemory
+
+    rows = np.array([[0.1 * i, 1.5, 0.0, 0.2, 0.05 * i] for i in range(30)])
+    mem = MotionMemory(rows)
+    seq = mem.lookup((1.02, 1.52, 0.1), steps=5)
+    assert seq is not None and np.allclose(seq[:, 1], 0.05 * np.arange(10, 15))
+    assert mem.lookup((1.0, 2.5, 0.0), steps=5) is None  # too far from the remembered run
+    assert mem.lookup((1.0, 1.5, 2.0), steps=5) is None  # wrong heading
+
+
+def test_mppi_with_memory_and_few_samples_follows_path():
+    from mpp.planning.local_planners.memory import MotionMemory
+
+    cm = empty_room()
+    path = np.array([[0.5, 1.5], [5.0, 1.5]])
+    teacher = drive(make_local_planner("mppi"), cm, path)
+    rows = np.column_stack([teacher[:-1], np.zeros((len(teacher) - 1, 2))])
+    rows[:, 3] = np.hypot(*np.diff(teacher[:, :2], axis=0).T) / 0.1
+    rows[:, 4] = np.diff(teacher[:, 2]) / 0.1
+    student = make_local_planner("mppi", samples=16, memory=MotionMemory(rows))
+    poses = drive(student, cm, path)
+    assert np.linalg.norm(poses[-1, :2] - path[-1]) < 0.12
+    assert student.memory_hits > 0
