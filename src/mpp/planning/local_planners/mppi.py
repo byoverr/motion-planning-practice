@@ -14,6 +14,7 @@ curve, MPPI finds smooth manoeuvres around obstacles that a constant-command DWA
 from __future__ import annotations
 
 import numpy as np
+from scipy.signal import savgol_filter
 
 from mpp.geometry import rollout_unicycle, wrap_angle
 from mpp.mapping.costmap import Costmap
@@ -43,11 +44,19 @@ class MPPI(LocalPlanner):
         w_reverse: float = 4.0,
         w_smooth: float = 0.01,
         w_speed: float = 4.0,
+        gamma: float = 0.002,
+        smoothing_window: int = 9,
         safety: float = 0.02,
+        sampler: str = "gaussian",
+        lognormal_sigma: float = 0.6,
         seed: int | None = 0,
     ) -> None:
         super().__init__(robot, dt)
         self.safety = safety
+        self.gamma = gamma
+        self.sg_window = smoothing_window
+        self.sampler = sampler
+        self.ln_sigma = lognormal_sigma
         self.T = int(round(horizon / dt))
         self.K = samples
         self.std = np.array([std_v, std_w])
@@ -75,10 +84,21 @@ class MPPI(LocalPlanner):
         # warm start: the previous optimum shifted by one step
         self.U = np.vstack([self.U[1:], self.U[-1:]])
         noise = self.rng.normal(size=(self.K, self.T, 2)) * self.std
+        if self.sampler == "lognormal":
+            # log-MPPI: normal x log-normal mixture, heavier tails explore further with
+            # the same number of samples (Mohamed et al., 2022)
+            s = self.ln_sigma
+            noise *= np.exp(self.rng.normal(-0.5 * s * s, s, size=noise.shape))
         noise[0] = 0.0  # keep the unperturbed previous solution as one of the candidates
         U = self.U[None] + noise
         U[..., 0] = np.clip(U[..., 0], r.min_v, r.max_v)
         U[..., 1] = np.clip(U[..., 1], -r.max_w, r.max_w)
+        # acceleration limits along the horizon, as Nav2's motion model applies them
+        acc = np.array([r.acc_v, r.acc_w]) * self.dt
+        prev = np.broadcast_to(np.array(vel, float), (self.K, 2))
+        for t in range(self.T):
+            U[:, t] = np.clip(U[:, t], prev - acc, prev + acc)
+            prev = U[:, t]
         traj = rollout_unicycle(pose, U[..., 0], U[..., 1], self.dt)
         xy = traj[..., :2]
 
@@ -105,9 +125,15 @@ class MPPI(LocalPlanner):
         dU = np.diff(np.concatenate([np.broadcast_to(np.array(vel), (self.K, 1, 2)), U], 1), axis=1)
         S = S + w["smooth"] * (dU**2).sum(axis=(1, 2))
 
+        # control cost of information-theoretic MPPI (Nav2: gamma / std^2 * u . (u_k - u))
+        S = S + (self.gamma / self.std**2 * self.U[None] * (U - self.U[None])).sum(axis=(1, 2))
+
         weights = np.exp(-(S - S.min()) / self.lam)
         weights /= weights.sum()
         self.U = np.einsum("k,ktc->tc", weights, U)
+        if self.sg_window >= 5:
+            # Savitzky-Golay smoothing of the optimal sequence (Nav2 does the same)
+            self.U = savgol_filter(self.U, self.sg_window, 2, axis=0, mode="nearest")
 
         best = rollout_unicycle(pose, self.U[None, :, 0], self.U[None, :, 1], self.dt)[0]
         status = "no_valid_trajectory" if hit.all() else "ok"
@@ -116,3 +142,13 @@ class MPPI(LocalPlanner):
             return LocalPlan(0.0, 0.0, status, None, xy[::20])
         v, wz = self.clamp(self.U[0, 0], self.U[0, 1], vel)
         return LocalPlan(v, wz, status, best, xy[np.argsort(S)[:40]])
+
+
+class LogMPPI(MPPI):
+    """MPPI with the normal x log-normal sampling distribution of log-MPPI."""
+
+    name = "log_mppi"
+
+    def __init__(self, robot: RobotParams, **kwargs) -> None:
+        kwargs.setdefault("sampler", "lognormal")
+        super().__init__(robot, **kwargs)

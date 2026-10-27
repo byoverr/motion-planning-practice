@@ -46,6 +46,8 @@ def _add_nav_args(p: argparse.ArgumentParser) -> None:
 
 
 def cmd_run(a: argparse.Namespace) -> int:
+    if a.camera == "rgbd" and a.sensor != "depth":
+        sys.exit("--camera rgbd показывает вид с камеры D435, добавьте --sensor depth")
     from mpp.runner import EpisodeConfig, run_episode
     from mpp.viz.plot2d import plot_episode
     from mpp.world.layout import warehouse
@@ -60,6 +62,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         seed=a.seed,
         max_time=a.max_time,
         nav=_nav_config(a),
+        sensor=a.sensor,
     )
     out = _out_dir(a.out, f"run_{a.scenario}_{a.global_planner}_{a.local_planner}")
     out.mkdir(parents=True, exist_ok=True)
@@ -111,6 +114,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
         out,
         jobs=a.jobs,
         nav=_nav_config(a),
+        sensors=_csv(a.sensors),
         plots=not a.no_plots,
     )
     ok = sum(r["success"] for r in rows)
@@ -219,8 +223,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--speed", type=float, default=1.0, help="скорость воспроизведения во вьюере")
     r.add_argument("--gif", action="store_true", help="записать анимацию episode.gif (без окна)")
-    r.add_argument("--camera", default="overview", choices=["overview", "chase"])
+    r.add_argument("--camera", default="overview", choices=["overview", "chase", "rgbd"])
     r.add_argument("--out", help="папка для результатов")
+    r.add_argument(
+        "--sensor",
+        default="lidar",
+        choices=["lidar", "depth"],
+        help="lidar = LDS-01 360°, depth = RGB-D камера RealSense D435 вместо лидара",
+    )
     _add_nav_args(r)
     r.set_defaults(func=cmd_run)
 
@@ -232,6 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--jobs", "-j", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     b.add_argument("--no-plots", action="store_true")
     b.add_argument("--out")
+    b.add_argument("--sensors", default="lidar", help="lidar,depth — сравнить датчики")
     _add_nav_args(b)
     b.set_defaults(func=cmd_bench)
 

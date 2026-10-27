@@ -7,16 +7,19 @@ import math
 import numpy as np
 
 from mpp.mapping.costmap import Costmap
+from mpp.planning.global_planners.base import ClearanceChecker
 
 
 class Sampler:
     """Uniform samples in the map and informed samples inside the ellipse
     {x : |x - start| + |x - goal| <= c_best} (Gammell et al., Informed RRT*)."""
 
-    def __init__(self, costmap: Costmap, rng: np.random.Generator, margin: float = 0.0) -> None:
+    def __init__(
+        self, costmap: Costmap, rng: np.random.Generator, checker: ClearanceChecker | None = None
+    ) -> None:
         self.cm = costmap
         self.rng = rng
-        self.margin = margin
+        self.free = checker.points_free if checker is not None else costmap.is_free
         x0, x1, y0, y1 = costmap.extent
         self.lo = np.array([x0, y0])
         self.hi = np.array([x1, y1])
@@ -28,7 +31,7 @@ class Sampler:
         while need > 0:
             pts = self.lo + self.rng.random((max(2 * need, 16), 2)) * (self.hi - self.lo)
             if free_only:
-                pts = pts[self.cm.is_free(pts, self.margin)]
+                pts = pts[self.free(pts)]
             out.append(pts[:need])
             need -= len(out[-1])
         return np.concatenate(out)[:n]
@@ -54,7 +57,7 @@ class Sampler:
             pts = centre + (unit * [a, b]) @ rot.T
             inside = np.all((pts >= self.lo) & (pts <= self.hi), axis=1)
             pts = pts[inside]
-            pts = pts[self.cm.is_free(pts, self.margin)]
+            pts = pts[self.free(pts)]
             out.append(pts[:need])
             need -= len(out[-1])
         return np.concatenate(out)[:n] if out else np.empty((0, 2))
@@ -104,10 +107,14 @@ class SearchGraph:
     """
 
     def __init__(
-        self, costmap: Costmap, start: np.ndarray, goal: np.ndarray, margin: float = 0.0
+        self,
+        costmap: Costmap,
+        start: np.ndarray,
+        goal: np.ndarray,
+        checker: ClearanceChecker | None = None,
     ) -> None:
         self.cm = costmap
-        self.margin = margin  # extra clearance demanded from edges between samples
+        self.checker = checker or ClearanceChecker(costmap, 0.0, start, goal)
         self.start_xy, self.goal_xy = np.asarray(start, float), np.asarray(goal, float)
         self.n = 0
         cap = 1024
@@ -203,9 +210,7 @@ class SearchGraph:
         key = (u, v) if u < v else (v, u)
         ok = self.edge_ok.get(key)
         if ok is None:
-            # edges touching the start or goal may be closer: the robot can stand near a wall
-            m = 0.0 if u in (self.start, self.goal) or v in (self.start, self.goal) else self.margin
-            ok = self.cm.segment_free(self.pts[u], self.pts[v], margin=m)
+            ok = self.checker.segment_free(self.pts[u], self.pts[v])
             self.edge_ok[key] = ok
             self.collision_checks += 1
         return ok

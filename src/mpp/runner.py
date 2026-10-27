@@ -34,6 +34,7 @@ class EpisodeConfig:
     local_kwargs: dict = field(default_factory=dict)
     nav: NavConfig = field(default_factory=NavConfig)
     lidar_noise: float = 0.0
+    sensor: str = "lidar"  # "lidar" (LDS-01, 360 deg) or "depth" (RealSense D435, 87 deg)
 
 
 @dataclass
@@ -41,6 +42,7 @@ class EpisodeResult:
     scenario: str
     global_planner: str
     local_planner: str
+    sensor: str
     start: str
     goal: str
     seed: int
@@ -76,11 +78,13 @@ def make_episode(cfg: EpisodeConfig, layout: Layout | None = None):
     scenario: Scenario = get_scenario(cfg.scenario)
     start = layout.pose(cfg.start or scenario.start)
     goal = layout.pose(cfg.goal or scenario.goal)
-    sim = Simulation(layout, scenario, start, lidar_noise=cfg.lidar_noise, seed=cfg.seed)
+    sim = Simulation(
+        layout, scenario, start, lidar_noise=cfg.lidar_noise, seed=cfg.seed, sensor=cfg.sensor
+    )
     costmap = Costmap.from_layout(layout, robot_radius=BURGER.radius)
     gp = make_global_planner(cfg.global_planner, seed=cfg.seed, **cfg.global_kwargs)
     local_kwargs = dict(cfg.local_kwargs)
-    if cfg.local_planner == "mppi":
+    if cfg.local_planner in ("mppi", "log_mppi"):
         local_kwargs.setdefault("seed", cfg.seed)  # MPPI samples random control sequences
     lp = make_local_planner(cfg.local_planner, BURGER, dt=cfg.control_dt, **local_kwargs)
     nav = Navigator(gp, lp, costmap, goal.xy, cfg.nav)
@@ -154,6 +158,7 @@ def run_episode(
         scenario=cfg.scenario,
         global_planner=cfg.global_planner,
         local_planner=cfg.local_planner,
+        sensor=cfg.sensor,
         start=start.name,
         goal=goal.name,
         seed=cfg.seed,

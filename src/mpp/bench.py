@@ -28,9 +28,11 @@ def _episode_job(args: tuple) -> dict:
 
     r = run_episode(cfg)
     if out_dir is not None:
-        name = f"{cfg.scenario}_{cfg.global_planner}_{cfg.local_planner}_s{cfg.seed}.png"
+        name = (
+            f"{cfg.scenario}_{cfg.global_planner}_{cfg.local_planner}_{cfg.sensor}_s{cfg.seed}.png"
+        )
         title = (
-            f"{cfg.scenario}: {cfg.global_planner} + {cfg.local_planner} — "
+            f"{cfg.scenario}: {cfg.global_planner} + {cfg.local_planner} ({cfg.sensor}) — "
             f"{'успех' if r.success else r.status}, {r.sim_time:.0f} с, "
             f"перепланирований {r.replans}, объездов {r.bypasses}"
         )
@@ -57,6 +59,7 @@ def run_matrix(
     jobs: int = 1,
     nav: NavConfig | None = None,
     plots: bool = True,
+    sensors: list[str] | None = None,
 ) -> list[dict]:
     out.mkdir(parents=True, exist_ok=True)
     runs_dir = out / "runs" if plots else None
@@ -64,9 +67,16 @@ def run_matrix(
         runs_dir.mkdir(exist_ok=True)
     cfgs = [
         EpisodeConfig(
-            scenario=s, global_planner=g, local_planner=lp, seed=seed, nav=nav or NavConfig()
+            scenario=s,
+            global_planner=g,
+            local_planner=lp,
+            seed=seed,
+            nav=nav or NavConfig(),
+            sensor=sensor,
         )
-        for s, g, lp, seed in itertools.product(scenarios, global_planners, local_planners, seeds)
+        for sensor, s, g, lp, seed in itertools.product(
+            sensors or ["lidar"], scenarios, global_planners, local_planners, seeds
+        )
     ]
     rows: list[dict] = []
     args = [(c, runs_dir) for c in cfgs]
@@ -82,15 +92,21 @@ def run_matrix(
             _progress(i, len(cfgs), row)
     write_csv(rows, out / "results.csv")
     (out / "summary.md").write_text(summarize(rows), encoding="utf-8")
-    plot_matrix(rows, out / "time_to_goal.png")
+    sensors_ = list(dict.fromkeys(r["sensor"] for r in rows))
+    for sensor in sensors_:
+        name = "time_to_goal.png" if len(sensors_) == 1 else f"time_to_goal_{sensor}.png"
+        plot_matrix([r for r in rows if r["sensor"] == sensor], out / name)
+    if len(sensors_) > 1:
+        plot_sensor_comparison(rows, out / "sensor_comparison.png")
     return rows
 
 
 def _progress(i: int, n: int, row: dict) -> None:
     mark = "ok " if row["success"] else "FAIL"
     print(
-        f"[{i:3d}/{n}] {mark} {row['scenario']:8s} {row['global_planner']:12s} "
-        f"{row['local_planner']:5s} seed={row['seed']} t={row['sim_time']:6.1f}s "
+        f"[{i:3d}/{n}] {mark} {row['sensor']:5s} {row['scenario']:8s} "
+        f"{row['global_planner']:12s} {row['local_planner']:14s} seed={row['seed']} "
+        f"t={row['sim_time']:6.1f}s "
         f"replans={row['replans']} bypasses={row['bypasses']} collisions={row['collisions']}",
         flush=True,
     )
@@ -120,12 +136,14 @@ def summarize(rows: list[dict]) -> str:
         "перепланирования · объезды · столкновения."
     )
     lines.append("")
-    by_scn = _group(rows, ("scenario",))
+    by_scn = _group(rows, ("sensor", "scenario"))
     locals_ = list(dict.fromkeys(r["local_planner"] for r in rows))
     globals_ = list(dict.fromkeys(r["global_planner"] for r in rows))
-    for (scn,), srows in by_scn.items():
+    sensor_names = {"lidar": "лидар LDS-01", "depth": "RGB-D камера D435"}
+    for (sensor, scn), srows in by_scn.items():
         sc = get_scenario(scn)
-        lines += [f"## {scn}: {sc.title}", "", sc.description, ""]
+        lines += [f"## {scn}: {sc.title} · {sensor_names.get(sensor, sensor)}", ""]
+        lines += [sc.description, ""]
         lines.append("| глобальный \\ локальный | " + " | ".join(locals_) + " |")
         lines.append("|---" * (len(locals_) + 1) + "|")
         cells = _group(srows, ("global_planner", "local_planner"))
@@ -172,12 +190,16 @@ def plot_matrix(rows: list[dict], out: Path, metric: str = "sim_time") -> None:
     globals_ = list(dict.fromkeys(r["global_planner"] for r in rows))
     locals_ = list(dict.fromkeys(r["local_planner"] for r in rows))
     cells = _group(rows, ("scenario", "global_planner", "local_planner"))
+    ncols = min(2, len(scenarios))
+    nrows = math.ceil(len(scenarios) / ncols)
     fig, axes = plt.subplots(
-        1, len(scenarios), figsize=(4.6 * len(scenarios), 4.2), sharey=True, squeeze=False
+        nrows, ncols, figsize=(6.4 * ncols, 3.9 * nrows), sharey=True, squeeze=False
     )
     fig.patch.set_facecolor(SURFACE)
+    for ax in axes.ravel()[len(scenarios) :]:
+        ax.set_visible(False)
     width = 0.8 / max(len(locals_), 1)
-    for ax, scn in zip(axes[0], scenarios, strict=True):
+    for ax, scn in zip(axes.ravel(), scenarios, strict=False):
         _style(ax)
         for j, lp in enumerate(locals_):
             xs, ys, fails = [], [], []
@@ -195,8 +217,10 @@ def plot_matrix(rows: list[dict], out: Path, metric: str = "sim_time") -> None:
             for x in fails:
                 ax.text(x, 1, "×", ha="center", va="bottom", color=INK, fontsize=12)
         ax.set_xticks(range(len(globals_)), globals_, rotation=0)
+        ax.set_xlim(-0.6, len(globals_) - 0.4)
         ax.set_title(f"{scn}: {get_scenario(scn).title}", fontsize=10, color=INK, loc="left")
-    axes[0][0].set_ylabel("время до цели, с (× — не доехал)", color=INK_2)
+    for row in axes:
+        row[0].set_ylabel("время до цели, с (× — не доехал)", color=INK_2)
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(
         handles,
@@ -209,7 +233,52 @@ def plot_matrix(rows: list[dict], out: Path, metric: str = "sim_time") -> None:
         title_fontsize=9,
         bbox_to_anchor=(0.5, 1.0),
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.12 / nrows))
+    fig.savefig(out, dpi=130, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def plot_sensor_comparison(rows: list[dict], out: Path) -> None:
+    """Success rate and mean time to goal per local planner, lidar vs depth camera
+    (all scenarios and global planners pooled)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    locals_ = list(dict.fromkeys(r["local_planner"] for r in rows))
+    sensors_ = list(dict.fromkeys(r["sensor"] for r in rows))
+    names = {"lidar": "лидар LDS-01 (360°)", "depth": "RGB-D D435 (87°)"}
+    cells = _group(rows, ("local_planner", "sensor"))
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
+    fig.patch.set_facecolor(SURFACE)
+    width = 0.8 / len(sensors_)
+    for ax, metric in zip(axes, ("success", "sim_time"), strict=True):
+        _style(ax)
+        for j, sensor in enumerate(sensors_):
+            ys = []
+            for lp in locals_:
+                rs = cells.get((lp, sensor), [])
+                if metric == "success":
+                    ys.append(100.0 * np.mean([r["success"] for r in rs]) if rs else np.nan)
+                else:
+                    ok = [r["sim_time"] for r in rs if r["success"]]
+                    ys.append(float(np.mean(ok)) if ok else np.nan)
+            xs = np.arange(len(locals_)) + (j - (len(sensors_) - 1) / 2) * width
+            ax.bar(
+                xs,
+                ys,
+                width * 0.92,
+                color=SERIES[j],
+                label=names.get(sensor, sensor),
+                edgecolor=SURFACE,
+                linewidth=1,
+            )
+        ax.set_xticks(range(len(locals_)), locals_, fontsize=8)
+        ax.set_ylabel("доехали, %" if metric == "success" else "время до цели, с", color=INK_2)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False, fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
     fig.savefig(out, dpi=130, facecolor=SURFACE)
     plt.close(fig)
 

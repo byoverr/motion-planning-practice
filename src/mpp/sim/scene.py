@@ -5,7 +5,7 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
-from mpp.robot.model import MJCF_PATH
+from mpp.robot.model import D435, MJCF_PATH, DepthCameraParams
 from mpp.world.layout import Layout, Pose2D
 from mpp.world.scenarios import Scenario
 
@@ -21,7 +21,44 @@ def yaw_quat(yaw: float) -> list[float]:
     return [float(np.cos(yaw / 2)), 0.0, 0.0, float(np.sin(yaw / 2))]
 
 
-def build_spec(layout: Layout, scenario: Scenario | None, start: Pose2D) -> mujoco.MjSpec:
+def mount_depth_camera(spec: mujoco.MjSpec, cam: DepthCameraParams = D435) -> None:
+    """Replace the LDS lidar by an Intel RealSense D435 (90 x 25 x 25 mm) on the top plate."""
+    for g in spec.body("base_scan").geoms:
+        g.group = 5  # hide the lidar (group 5 is neither drawn nor ray-cast)
+        g.contype = g.conaffinity = 0
+    body = spec.body("base_footprint").add_body(name="camera_link", pos=list(cam.mount))
+    body.add_geom(
+        name="d435_case",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=[0.0125, 0.045, 0.0125],
+        rgba=[0.55, 0.56, 0.58, 1.0],
+        group=1,
+        contype=0,
+        conaffinity=0,
+        density=0,
+    )
+    for y in (-0.025, 0.025, 0.0):
+        body.add_geom(
+            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+            size=[0.0045 if y else 0.003, 0.001],
+            pos=[0.0126, y, 0.0],
+            quat=[0.70710678, 0.0, 0.70710678, 0.0],
+            rgba=[0.05, 0.05, 0.05, 1.0],
+            group=1,
+            contype=0,
+            conaffinity=0,
+            density=0,
+        )
+    body.add_site(name="depth_camera", pos=[0.0125, 0.0, 0.0], size=[0.005, 0.005, 0.005])
+    # an actual MuJoCo camera with the same optics, for rendering RGB / depth images
+    body.add_camera(
+        name="rgbd", pos=[0.0125, 0.0, 0.0], xyaxes=[0, -1, 0, 0, 0, 1], fovy=cam.vfov_deg
+    )
+
+
+def build_spec(
+    layout: Layout, scenario: Scenario | None, start: Pose2D, sensor: str = "lidar"
+) -> mujoco.MjSpec:
     spec = mujoco.MjSpec.from_file(str(MJCF_PATH))
     spec.modelname = "warehouse"
     spec.visual.global_.offwidth = 1280
@@ -97,6 +134,8 @@ def build_spec(layout: Layout, scenario: Scenario | None, start: Pose2D) -> mujo
         fovy=45,
     )
 
+    if sensor == "depth":
+        mount_depth_camera(spec)
     robot = spec.body("base_footprint")
     robot.pos = [start.x, start.y, 0.0]
     robot.quat = yaw_quat(start.yaw)
@@ -104,5 +143,7 @@ def build_spec(layout: Layout, scenario: Scenario | None, start: Pose2D) -> mujo
     return spec
 
 
-def build_model(layout: Layout, scenario: Scenario | None, start: Pose2D) -> mujoco.MjModel:
-    return build_spec(layout, scenario, start).compile()
+def build_model(
+    layout: Layout, scenario: Scenario | None, start: Pose2D, sensor: str = "lidar"
+) -> mujoco.MjModel:
+    return build_spec(layout, scenario, start, sensor).compile()

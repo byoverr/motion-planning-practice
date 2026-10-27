@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from mpp.planning.local_planners.base import LocalPlan, LocalPlanner
 from mpp.planning.local_planners.dwa import DWA
-from mpp.planning.local_planners.mppi import MPPI
+from mpp.planning.local_planners.graceful import GracefulController
+from mpp.planning.local_planners.mppi import MPPI, LogMPPI
 from mpp.planning.local_planners.rpp import RegulatedPurePursuit
+from mpp.planning.local_planners.vector_pursuit import VectorPursuit
 from mpp.robot.model import BURGER, RobotParams
 
 LOCAL_PLANNERS: dict[str, type[LocalPlanner]] = {
     "dwa": DWA,
     "mppi": MPPI,
+    "log_mppi": LogMPPI,
     "rpp": RegulatedPurePursuit,
+    "graceful": GracefulController,
+    "vector_pursuit": VectorPursuit,
 }
 
 

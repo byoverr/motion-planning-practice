@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
-from mpp.robot.model import BURGER, RobotParams
+from mpp.robot.model import BURGER, D435, DepthCameraParams, RobotParams
 from mpp.sim.scene import GROUP_BOX, GROUP_WORLD, build_model
 from mpp.world.layout import Layout, Pose2D
 from mpp.world.scenarios import Scenario
@@ -42,11 +42,17 @@ class Simulation:
         robot: RobotParams = BURGER,
         lidar_noise: float = 0.0,
         seed: int = 0,
+        sensor: str = "lidar",
+        camera: DepthCameraParams = D435,
     ) -> None:
+        if sensor not in ("lidar", "depth"):
+            raise ValueError(f"unknown sensor {sensor!r}; use 'lidar' or 'depth'")
         self.layout = layout
         self.scenario = scenario
         self.robot = robot
-        self.model = build_model(layout, scenario, start)
+        self.sensor = sensor
+        self.camera = camera
+        self.model = build_model(layout, scenario, start, sensor)
         self.data = mujoco.MjData(self.model)
         m = self.model
         self.base_id = m.body("base_footprint").id
@@ -75,6 +81,10 @@ class Simulation:
         self._groups = np.zeros(6, dtype=np.uint8)
         self._groups[GROUP_WORLD] = 1
         self._groups[GROUP_BOX] = 1
+        if sensor == "depth":
+            self._init_depth_camera()
+        self.last_cloud = np.empty((0, 3))  # obstacle points of the last depth frame (world)
+        self.last_depth: np.ndarray | None = None  # z-depth image of the last frame (rows, cols)
         mujoco.mj_forward(self.model, self.data)
 
     # ------------------------------------------------------------------ state
@@ -148,6 +158,10 @@ class Simulation:
     # ------------------------------------------------------------------ sensing
 
     def scan(self) -> Scan:
+        """One reading of the robot's range sensor as a planar scan for the costmap."""
+        return self._depth_scan() if self.sensor == "depth" else self._lidar_scan()
+
+    def _lidar_scan(self) -> Scan:
         """360-degree planar lidar (LDS-01 style) via MuJoCo ray casting."""
         m, d, r = self.model, self.data, self.robot
         origin = d.site_xpos[self.lidar_site].copy()
@@ -179,3 +193,88 @@ class Simulation:
         ranges = np.where((self._ray_geom < 0) | (dist > rmax), np.inf, dist)
         ranges = np.where(ranges < rmin, np.nan, ranges)
         return Scan(origin=origin[:2], angles=ang, ranges=ranges, max_range=rmax)
+
+    # ------------------------------------------------------------------ depth camera
+
+    def _init_depth_camera(self) -> None:
+        c = self.camera
+        self.cam_site = self.model.site("depth_camera").id
+        # pinhole model: rays through a regular grid on the image plane (x forward, y left, z up)
+        u = np.linspace(
+            np.tan(np.radians(c.hfov_deg / 2)), -np.tan(np.radians(c.hfov_deg / 2)), c.cols
+        )
+        v = np.linspace(
+            np.tan(np.radians(c.vfov_deg / 2)), -np.tan(np.radians(c.vfov_deg / 2)), c.rows
+        )
+        uu, vv = np.meshgrid(u, v)  # (rows, cols), row 0 is the top of the image
+        d = np.stack([np.ones_like(uu), uu, vv], axis=-1)
+        self._cam_dirs = d / np.linalg.norm(d, axis=-1, keepdims=True)  # unit rays, camera frame
+        self._cam_col_angle = np.arctan(u)  # horizontal angle of every image column
+        n = c.rows * c.cols
+        self._cam_vec = np.zeros(3 * n)
+        self._cam_geom = np.zeros(n, dtype=np.int32)
+        self._cam_dist = np.zeros(n)
+
+    def _depth_scan(self) -> Scan:
+        """RGB-D camera turned into a "virtual laser scan", the way TurtleBot 2 and many
+        camera-only robots feed a 2D costmap (depthimage_to_laserscan / pointcloud_to_laserscan):
+
+        1. cast one ray per (decimated) depth pixel and add stereo noise to the z-depth;
+        2. drop pixels outside the valid range and points outside the obstacle height band
+           (the floor, things above the robot);
+        3. per image column keep the closest obstacle point -> one beam of the scan.
+        Columns that see nothing clear free space up to the camera range; a column with a
+        reading closer than the minimum range is unknown and is skipped.
+        """
+        c, m, d = self.camera, self.model, self.data
+        origin = d.site_xpos[self.cam_site].copy()
+        rot = d.site_xmat[self.cam_site].reshape(3, 3)
+        dirs = self._cam_dirs.reshape(-1, 3)
+        world = dirs @ rot.T
+        self._cam_vec[:] = world.ravel()
+        n = len(dirs)
+        mujoco.mj_multiRay(
+            m,
+            d,
+            origin,
+            self._cam_vec,
+            self._groups,
+            1,
+            -1,
+            self._cam_geom,
+            self._cam_dist,
+            None,
+            n,
+            c.max_range / dirs[:, 0].min(),
+        )
+        hit = self._cam_geom >= 0
+        z = np.where(hit, self._cam_dist * dirs[:, 0], np.nan)  # depth along the optical axis
+        if c.noise_coeff > 0:
+            z = z + self.rng.normal(0.0, 1.0, n) * c.noise_coeff * np.nan_to_num(z) ** 2
+        too_close = hit & (z < c.min_range)
+        valid = hit & (z >= c.min_range) & (z <= c.max_range)
+        dist = z / dirs[:, 0]
+        pts = origin + np.nan_to_num(dist)[:, None] * world
+        obstacle = valid & (pts[:, 2] > c.min_obstacle_height) & (pts[:, 2] < c.max_obstacle_height)
+
+        rows, cols = c.rows, c.cols
+        self.last_depth = np.where(valid, z, np.nan).reshape(rows, cols)
+        self.last_cloud = pts[obstacle]
+        horiz = np.hypot(pts[:, 0] - origin[0], pts[:, 1] - origin[1])
+        horiz = np.where(obstacle, horiz, np.inf).reshape(rows, cols)
+        ranges = horiz.min(axis=0)
+        unknown = (too_close.reshape(rows, cols)).any(axis=0)
+        ranges = np.where(unknown, np.nan, ranges)
+        yaw = self.pose()[2]
+        return Scan(
+            origin=origin[:2],
+            angles=yaw + self._cam_col_angle,
+            ranges=ranges,
+            max_range=c.max_range,
+        )
+
+    def fov(self) -> tuple[float, float] | None:
+        """Horizontal field of view (half-angle, range) of a limited sensor, None for 360 deg."""
+        if self.sensor == "depth":
+            return np.radians(self.camera.hfov_deg / 2), self.camera.max_range
+        return None

@@ -36,3 +36,27 @@ class RobotParams:
 
 
 BURGER = RobotParams()
+
+
+@dataclass(frozen=True)
+class DepthCameraParams:
+    """Intel RealSense D435 depth stream (datasheet values), decimated to a coarse pixel grid.
+
+    The depth error of a stereo camera grows with the square of the distance; ~2 cm at 2 m
+    matches the D435's < 2 % RMS spec.
+    """
+
+    hfov_deg: float = 87.0
+    vfov_deg: float = 58.0
+    cols: int = 96
+    rows: int = 36
+    min_range: float = 0.3  # closer than this the stereo matcher gives no depth
+    max_range: float = 3.0  # usable range indoors
+    noise_coeff: float = 0.005  # sigma_z = noise_coeff * z^2
+    # points between these heights are obstacles (Nav2: min/max_obstacle_height)
+    min_obstacle_height: float = 0.05
+    max_obstacle_height: float = 0.40
+    mount: tuple[float, float, float] = (0.0, 0.0, 0.175)  # on the top plate, where the LDS sits
+
+
+D435 = DepthCameraParams()

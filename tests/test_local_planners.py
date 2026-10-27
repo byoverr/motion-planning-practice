@@ -53,12 +53,46 @@ def test_avoiding_planners_drive_around_box_on_path(name):
     assert cm.clearance_at(poses[:, :2]).min() > 0.105  # never touched the box
 
 
-def test_pure_pursuit_stops_in_front_of_box():
+@pytest.mark.parametrize("name", ["rpp", "graceful", "vector_pursuit"])
+def test_path_trackers_stop_in_front_of_box(name):
     cm = empty_room()
     cm.fill_rect(2.4, 1.3, 2.8, 1.7, layer="obstacles")
     cm.update()
-    lp = make_local_planner("rpp")
+    lp = make_local_planner(name)
     lp.set_path(np.array([[0.5, 1.5], [5.0, 1.5]]))
     r = lp.compute((2.15, 1.5, 0.0), (0.2, 0.0), cm)
     assert r.status == "blocked" and r.v == 0.0
     assert not lp.avoids_obstacles
+
+
+def test_vector_pursuit_radius_goes_straight_on_straight_path():
+    from mpp.planning.local_planners.vector_pursuit import VectorPursuit
+    from mpp.robot.model import BURGER
+
+    vp = VectorPursuit(BURGER)
+    assert vp.turning_radius(0.6, 0.0, 0.0) == float("inf")
+    # point to the left with the path heading also turning left -> finite left turn
+    assert 0.25 <= vp.turning_radius(0.5, 0.2, 0.5) < 2.0
+
+
+def test_graceful_control_law_matches_nav2_formula():
+    """kappa = -1/r * (k_delta*(delta - atan(-k_phi*phi))
+    + (1 + k_phi/(1+(k_phi*phi)^2))*sin(delta)), see smooth_control_law.cpp."""
+    import math
+
+    from mpp.planning.local_planners.graceful import GracefulController
+    from mpp.robot.model import BURGER
+
+    gc = GracefulController(BURGER)
+    r, phi, delta = 0.8, 0.3, -0.2
+    expected = (
+        -1
+        / r
+        * (
+            1.0 * (delta - math.atan(-2.0 * phi))
+            + (1 + 2.0 / (1 + (2.0 * phi) ** 2)) * math.sin(delta)
+        )
+    )
+    assert gc.curvature(r, phi, delta) == pytest.approx(expected)
+    v, w = gc.control((1.0, 0.0, 0.0), (0.0, 0.0, 0.0))  # target straight ahead
+    assert w == pytest.approx(0.0, abs=1e-9) and v > 0
