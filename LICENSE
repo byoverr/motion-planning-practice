@@ -22,3 +22,8 @@ SOFTWARE.
 
 The TurtleBot3 meshes in src/mpp/robot/turtlebot3_burger/meshes are by ROBOTIS
 and licensed under the Apache License 2.0 (see src/mpp/robot/turtlebot3_burger/LICENSE).
+
+src/mpp/planning/local_planners/graceful.py is a Python port of nav2_graceful_controller
+(https://github.com/ros-navigation/navigation2) and vector_pursuit.py a port of
+vector_pursuit_controller (https://github.com/blackcoffeerobotics/vector_pursuit_controller);
+both originals are licensed under the Apache License 2.0.

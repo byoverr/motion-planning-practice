@@ -65,19 +65,19 @@ class RegulatedPurePursuit(LocalPlanner):
         else:
             dist2 = max(float(local @ local), 1e-6)
             curvature = 2.0 * local[1] / dist2
-            v = r.max_v
-            # regulation 1: slow down on tight curves
+            # regulation 1: slow down on tight curves; 2: slow down close to obstacles.
+            # Nav2 takes the smaller of the two (regulation_functions.hpp)
             radius = 1.0 / max(abs(curvature), 1e-6)
-            if radius < self.r_min:
-                v *= radius / self.r_min
-            # regulation 2: slow down close to obstacles
+            v_curv = r.max_v * min(1.0, radius / self.r_min)
             clearance = float(costmap.clearance_at(np.array(pose[:2])))
+            v_cost = r.max_v
             if clearance < self.prox_dist:
-                v *= self.prox_gain * clearance / self.prox_dist
-            # regulation 3: slow down when approaching the goal
-            rem = self.remaining()
-            if rem < self.approach:
-                v *= max(rem / self.approach, 0.2)
+                v_cost = r.max_v * self.prox_gain * clearance / self.prox_dist
+            v = min(v_curv, v_cost)
+            # regulation 3: approach the goal slowly, scaled by the straight-line distance
+            if self.remaining() < self.approach:
+                d_goal = float(np.linalg.norm(self.path[-1] - np.array(pose[:2])))
+                v = min(v, max(v * d_goal / self.approach, self.min_speed))
             v = max(v, self.min_speed)
             w = v * curvature
 

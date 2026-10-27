@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from mpp.geometry import cumulative_length, resample_path
+from mpp.geometry import cumulative_length, resample_path, rollout_unicycle
 from mpp.mapping.costmap import Costmap
 from mpp.robot.model import RobotParams
 
@@ -67,6 +67,25 @@ class LocalPlanner(ABC):
         """Point on the path `ahead` metres after the closest point (clamped to the end)."""
         target = min(self.s[self.idx] + ahead, self.s[-1])
         return np.array([np.interp(target, self.s, self.path[:, k]) for k in (0, 1)])
+
+    def tangent_at(self, ahead: float) -> float:
+        """Direction of the path `ahead` metres after the closest point."""
+        target = min(self.s[self.idx] + ahead, self.s[-1])
+        k = int(np.clip(np.searchsorted(self.s, target), 1, len(self.path) - 1))
+        d = self.path[min(k + 1, len(self.path) - 1)] - self.path[k - 1]
+        return float(np.arctan2(d[1], d[0]))
+
+    def arc_blocked(
+        self, costmap: Costmap, pose, v: float, w: float, distance: float, margin: float = 0.01
+    ) -> bool:
+        """Would driving the arc (v, w) for `distance` metres hit an obstacle? Turning in place
+        is always safe for a disc robot. Used by the path-tracking controllers."""
+        if v <= 1e-3:
+            return False
+        steps = max(int(np.ceil(distance / (0.5 * costmap.res))), 2)
+        dt = distance / steps / v
+        arc = rollout_unicycle(pose, np.full((1, steps), v), np.full((1, steps), w), dt)[0]
+        return bool((costmap.clearance_at(arc[:, :2]) < self.robot.radius + margin).any())
 
     def local_segment(self, length: float) -> np.ndarray:
         n = int(length / PATH_STEP) + 1
