@@ -14,3 +14,12 @@ def test_blocked_corridor_forces_global_replan():
     assert r.success and r.collisions == 0
     assert r.replans >= 1 and r.bypasses == 0
     assert r.distance > r.first_plan_length + 1.0  # the detour is longer than the first plan
+
+
+def test_camera_robot_drives_around_low_box():
+    r = run_episode(
+        EpisodeConfig(
+            scenario="low_box", global_planner="astar", local_planner="dwa", sensor="depth"
+        )
+    )
+    assert r.success and r.collisions == 0

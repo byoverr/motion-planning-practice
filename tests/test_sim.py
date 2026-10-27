@@ -45,3 +45,35 @@ def test_box_falls_when_robot_comes_close():
     assert box.name in sim.dropped
     z = sim.data.xpos[sim.box_body[box.name]][2]
     assert abs(z - box.size[2] / 2) < 0.01  # resting on the floor
+
+
+def test_depth_camera_sees_shelf_ahead_and_nothing_behind():
+    lay = warehouse()
+    sim = Simulation(lay, None, Pose2D("s", 2.2, 3.425, np.pi / 2), sensor="depth")
+    scan = sim.scan()
+    centre = scan.ranges[len(scan.ranges) // 2]
+    # shelf L2 starts at y = 4.3; the camera sits 12.5 mm in front of the robot centre
+    assert abs(centre - (4.3 - 3.425 - 0.0125)) < 0.03
+    half, _ = sim.fov()
+    rel = np.angle(np.exp(1j * (scan.angles - np.pi / 2)))
+    assert np.abs(rel).max() <= half + 1e-6  # the camera only looks forward
+    assert sim.last_depth.shape == (sim.camera.rows, sim.camera.cols)
+
+
+def test_low_box_is_invisible_to_lidar_but_seen_by_camera():
+    lay = warehouse()
+    sc = get_scenario("low_box")
+    box = sc.boxes[0]
+    pose = Pose2D("s", box.x - 1.0, 6.05, 0.0)
+    for sensor, visible in (("lidar", False), ("depth", True)):
+        sim = Simulation(lay, sc, pose, sensor=sensor)
+        sim.step(0.5)
+        scan = sim.scan()
+        ok = np.isfinite(scan.ranges)
+        hits = scan.origin + scan.ranges[ok, None] * np.column_stack(
+            [np.cos(scan.angles[ok]), np.sin(scan.angles[ok])]
+        )
+        # the box occupies y in [6.1, 6.5]; the shelf face right behind it is at y = 6.5
+        half = box.size[1] / 2
+        near_box = (np.abs(hits[:, 0] - box.x) < 0.25) & (np.abs(hits[:, 1] - box.y) < half - 0.03)
+        assert near_box.any() == visible, sensor
