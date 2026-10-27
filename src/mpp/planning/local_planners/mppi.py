@@ -52,6 +52,7 @@ class MPPI(LocalPlanner):
         lognormal_sigma: float = 0.6,
         memory: MotionMemory | None = None,
         memory_share: float = 0.5,
+        ancillary: str | None = None,
         seed: int | None = 0,
     ) -> None:
         super().__init__(robot, dt)
@@ -63,6 +64,7 @@ class MPPI(LocalPlanner):
         self.memory = memory
         self.memory_share = memory_share
         self.memory_hits = 0
+        self.ancillary = ancillary
         self.T = int(round(horizon / dt))
         self.K = samples
         self.std = np.array([std_v, std_w])
@@ -84,6 +86,30 @@ class MPPI(LocalPlanner):
     def reset(self) -> None:
         self.U = np.zeros((self.T, 2))
 
+    def pursuit_prior(self, pose, lookahead: float = 0.5) -> np.ndarray:
+        """Command sequence of a plain pure-pursuit controller along the global path, used as
+        an ancillary proposal (Biased-MPPI, Trevisan & Alonso-Mora 2024). No memory needed."""
+        r = self.robot
+        x, y, th = pose
+        out = np.zeros((self.T, 2))
+        idx = self.idx
+        for t in range(self.T):
+            seg = self.path[idx : idx + 60]
+            idx += int(np.argmin(np.hypot(seg[:, 0] - x, seg[:, 1] - y)))
+            k = min(int(np.searchsorted(self.s, self.s[idx] + lookahead)), len(self.path) - 1)
+            dx, dy = self.path[k, 0] - x, self.path[k, 1] - y
+            lx, ly = np.cos(th) * dx + np.sin(th) * dy, -np.sin(th) * dx + np.cos(th) * dy
+            if lx < 0.05 and abs(np.arctan2(ly, lx)) > 0.8:
+                v, w = 0.0, float(np.sign(ly)) * 1.2  # turn towards the path first
+            else:
+                v = r.max_v * min(1.0, (self.s[-1] - self.s[idx]) / 0.5 + 0.1)
+                w = float(np.clip(v * 2.0 * ly / max(lx * lx + ly * ly, 1e-6), -r.max_w, r.max_w))
+            out[t] = v, w
+            th += w * self.dt
+            x += v * np.cos(th) * self.dt
+            y += v * np.sin(th) * self.dt
+        return out
+
     def compute(self, pose, vel, costmap: Costmap) -> LocalPlan:
         r = self.robot
         self.update_progress(pose)
@@ -97,14 +123,18 @@ class MPPI(LocalPlanner):
             noise *= np.exp(self.rng.normal(-0.5 * s * s, s, size=noise.shape))
         noise[0] = 0.0  # keep the unperturbed previous solution as one of the candidates
         U = self.U[None] + noise
+        # optional proposal for part of the samples (Biased-MPPI): a remembered run of this
+        # route, or a plain pure-pursuit controller along the global path
+        prior = None
         if self.memory is not None:
-            # part of the samples around what worked here on an earlier run (Biased-MPPI style)
             prior = self.memory.lookup(pose, self.T)
-            if prior is not None:
-                self.memory_hits += 1
-                k = max(1, int(self.K * self.memory_share))
-                U[-k:] = prior[None] + noise[-k:]
-                U[-1] = prior
+            self.memory_hits += prior is not None
+        elif self.ancillary == "pursuit":
+            prior = self.pursuit_prior(pose)
+        if prior is not None:
+            k = max(1, int(self.K * self.memory_share))
+            U[-k:] = prior[None] + noise[-k:]
+            U[-1] = prior
         U[..., 0] = np.clip(U[..., 0], r.min_v, r.max_v)
         U[..., 1] = np.clip(U[..., 1], -r.max_w, r.max_w)
         # acceleration limits along the horizon, as Nav2's motion model applies them

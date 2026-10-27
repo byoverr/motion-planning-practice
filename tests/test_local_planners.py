@@ -122,3 +122,10 @@ def test_mppi_with_memory_and_few_samples_follows_path():
     poses = drive(student, cm, path)
     assert np.linalg.norm(poses[-1, :2] - path[-1]) < 0.12
     assert student.memory_hits > 0
+
+
+def test_mppi_with_pursuit_prior_and_few_samples_follows_path():
+    cm = empty_room()
+    path = np.array([[0.5, 1.5], [5.0, 1.5]])
+    poses = drive(make_local_planner("mppi", samples=16, ancillary="pursuit"), cm, path)
+    assert np.linalg.norm(poses[-1, :2] - path[-1]) < 0.12
